@@ -1,0 +1,357 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== 用户与权限 ====================
+
+model User {
+  id              String              @id @default(cuid())
+  email           String              @unique
+  password        String
+  name            String
+  avatar          String?
+  role            Role                @default(USER)
+  documents       Document[]
+  comments        Comment[]
+  chatSessions    AIChatSession[]
+  usageLogs       AIUsageLog[]
+  contributions   UserContribution[]
+  recommendations Recommendation[]
+  collaborations  Collaboration[]     @relation("UserCollaborations")
+  favorites       Favorite[]
+  notifications   Notification[]
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+}
+
+enum Role {
+  ADMIN
+  EDITOR
+  USER
+}
+
+// ==================== 文档管理 ====================
+
+model Document {
+  id             String              @id @default(cuid())
+  title          String
+  content        String
+  summary        String?
+  authorId       String
+  author         User                @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  tags           Tag[]               @relation("DocumentTags")
+  versions       DocumentVersion[]
+  comments       Comment[]
+  embeddings     DocumentEmbedding[]
+  favorites      Favorite[]
+  recommendations Recommendation[]
+  collaborations Collaboration[]     @relation("DocumentCollaborations")
+  knowledgeNodes KnowledgeNode[]
+  version        Int                 @default(1)
+  views          Int                 @default(0)
+  isPublic       Boolean             @default(true)
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+}
+
+model Tag {
+  id        String     @id @default(cuid())
+  name      String     @unique
+  color     String?
+  documents Document[] @relation("DocumentTags")
+  createdAt DateTime   @default(now())
+}
+
+model DocumentVersion {
+  id         String   @id @default(cuid())
+  documentId String
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  content    String
+  version    Int
+  authorId   String
+  author     User     @relation(fields: [authorId], references: [id])
+  createdAt  DateTime @default(now())
+}
+
+model Comment {
+  id         String   @id @default(cuid())
+  documentId String
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  content    String
+  createdAt  DateTime @default(now())
+}
+
+model Favorite {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documentId String
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([userId, documentId])
+}
+
+// ==================== 向量嵌入与RAG ====================
+
+model DocumentEmbedding {
+  id            String   @id @default(cuid())
+  documentId    String
+  document      Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  embeddingJson String   @db.Text
+  chunkContent  String   @db.Text
+  chunkIndex    Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([documentId, chunkIndex])
+}
+
+model RAGUsageLog {
+  id               String   @id @default(cuid())
+  userId           String
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  query            String   @db.Text
+  resultCount      Int
+  model            String
+  promptTokens     Int      @default(0)
+  completionTokens Int      @default(0)
+  duration         Int
+  createdAt        DateTime @default(now())
+}
+
+// ==================== 知识图谱 ====================
+
+model KnowledgeNode {
+  id           String             @id @default(cuid())
+  documentId   String
+  document     Document           @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  concept      String
+  description  String?
+  nodeType     KnowledgeNodeType  @default(CONCEPT)
+  confidence   Float              @default(1.0)
+  relations    KnowledgeRelation[] @relation("SourceRelations")
+  targetRelations KnowledgeRelation[] @relation("TargetRelations")
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  @@unique([documentId, concept])
+}
+
+model KnowledgeRelation {
+  id           String        @id @default(cuid())
+  sourceNodeId String
+  sourceNode   KnowledgeNode @relation("SourceRelations", fields: [sourceNodeId], references: [id], onDelete: Cascade)
+  targetNodeId String
+  targetNode   KnowledgeNode @relation("TargetRelations", fields: [targetNodeId], references: [id], onDelete: Cascade)
+  relationType String
+  weight       Float         @default(1.0)
+  evidence     String?
+  createdAt    DateTime      @default(now())
+
+  @@unique([sourceNodeId, targetNodeId, relationType])
+}
+
+enum KnowledgeNodeType {
+  CONCEPT
+  ENTITY
+  EVENT
+  ATTRIBUTE
+}
+
+// ==================== 推荐系统 ====================
+
+model Recommendation {
+  id             String             @id @default(cuid())
+  userId         String
+  user           User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documentId     String
+  document       Document           @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  score          Float
+  reason         String?
+  source         RecommendationSource
+  isViewed       Boolean            @default(false)
+  createdAt      DateTime           @default(now())
+
+  @@unique([userId, documentId, source])
+}
+
+enum RecommendationSource {
+  CONTENT_BASED
+  COLLABORATIVE
+  KNOWLEDGE_GRAPH
+  HYBRID
+}
+
+// ==================== 协作编辑 ====================
+
+model Collaboration {
+  id           String           @id @default(cuid())
+  documentId   String
+  document     Document         @relation("DocumentCollaborations", fields: [documentId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User             @relation("UserCollaborations", fields: [userId], references: [id], onDelete: Cascade)
+  role         CollaborationRole
+  status       CollaborationStatus @default(PENDING)
+  invitedBy    String?
+  lastActiveAt DateTime?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  @@unique([documentId, userId])
+}
+
+model CollaborationSession {
+  id           String   @id @default(cuid())
+  documentId   String
+  userId       String
+  cursorPosition Int    @default(0)
+  selection    String?
+  lastActiveAt DateTime @default(now())
+  createdAt    DateTime @default(now())
+}
+
+model CollaborationOperation {
+  id          String   @id @default(cuid())
+  sessionId   String
+  operationType String
+  position    Int
+  content     String
+  userId      String
+  version     Int
+  createdAt   DateTime @default(now())
+}
+
+enum CollaborationRole {
+  OWNER
+  EDITOR
+  VIEWER
+  COMMENTER
+}
+
+enum CollaborationStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+// ==================== 用户贡献度 ====================
+
+model UserContribution {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  period          String   // 格式: YYYY-MM
+  documentsCreated Int     @default(0)
+  documentsEdited  Int     @default(0)
+  commentsWritten  Int     @default(0)
+  questionsAnswered Int    @default(0)
+  helpfulVotes      Int    @default(0)
+  totalScore        Float  @default(0)
+  rank              Int?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([userId, period])
+}
+
+// ==================== 通知系统 ====================
+
+model Notification {
+  id          String           @id @default(cuid())
+  userId      String
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type        NotificationType
+  title       String
+  content     String
+  data        String?          @db.Text
+  isRead      Boolean          @default(false)
+  createdAt   DateTime         @default(now())
+}
+
+enum NotificationType {
+  DOCUMENT_SHARED
+  COMMENT_MENTION
+  COLLABORATION_INVITE
+  SYSTEM_NOTICE
+  RECOMMENDATION
+}
+
+// ==================== AI 相关 ====================
+
+model AIChatSession {
+  id        String         @id @default(cuid())
+  userId    String
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  messages  AIChatMessage[]
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+}
+
+model AIChatMessage {
+  id               String           @id @default(cuid())
+  sessionId        String
+  session          AIChatSession    @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  role             AIChatMessageRole
+  content          String
+  model            String
+  promptTokens     Int?
+  completionTokens Int?
+  createdAt        DateTime         @default(now())
+}
+
+model AIProviderConfig {
+  id           String         @id @default(cuid())
+  provider     AIProvider
+  apiKey       String
+  baseUrl      String?
+  defaultModel String
+  isActive     Boolean        @default(true)
+  usageLogs    AIUsageLog[]
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+}
+
+model AIUsageLog {
+  id               String          @id @default(cuid())
+  userId           String
+  user             User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  configId         String
+  config           AIProviderConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+  actionType       AIActionType
+  model            String
+  promptTokens     Int
+  completionTokens Int
+  cost             Float
+  createdAt        DateTime        @default(now())
+}
+
+enum AIChatMessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+enum AIProvider {
+  OPENAI
+  QWEN
+  CLAUDE
+  CUSTOM
+}
+
+enum AIActionType {
+  SUMMARIZE
+  OPTIMIZE
+  GENERATE_TAGS
+  CHAT
+  RAG_QUERY
+  EMBEDDING
+}
